@@ -1,0 +1,41 @@
+name: Daily CMA Report Automation
+
+on:
+  # schedule:
+  #   # 평일(월~금) KST 오전 10시 (UTC 오전 1시) 자동 실행 설정 시 주석 해제
+  #   - cron: '07 6 * * 1-5'
+  workflow_dispatch: # Actions 탭에서 수동 실행 가능
+
+jobs:
+  run-scraper-and-email:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # 생성하신 requirements.txt를 통해 패키지 일괄 설치
+          pip install -r requirements.txt
+
+      - name: Install Playwright Browsers & Deps
+        # 리눅스 환경에서 가상 브라우저 구동에 필요한 의존성 파일들을 함께 설치합니다.
+        run: |
+          playwright install chromium --with-deps
+
+      - name: Run CMA Scraper & Email Script
+        run: python main.py
+        env:
+          # 지메일 발송용 환경변수 (GitHub Secrets에 등록 필수)
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          # CMA 로그인용 환경변수 (GitHub Secrets에 등록 필수)
+          CMA_USER: ${{ secrets.CMA_USER }}
+          CMA_PASSWORD: ${{ secrets.CMA_PASSWORD }}
