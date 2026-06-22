@@ -271,7 +271,7 @@ def process_data(data):
             except Exception as e: print(f"⚠️ Weekly 에러: {e}")
 
     # 3. Monthly
-    print("\n" + "="*20 + " [3] Monthly 분석 시작 " + "="=20)
+    print("\n" + "="*20 + " [3] Monthly 분석 시작 " + "="*20)
     m_resp = session.get(data['monthly_url'])
     m_soup = BeautifulSoup(m_resp.text, 'html.parser')
     page_text_monthly = m_soup.get_text(separator='\n', strip=True)
