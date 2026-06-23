@@ -58,7 +58,7 @@ def get_dow_jones_sso_url():
         print(f"⚠️ SSO URL 획득 실패: {e}")
     return None
 
-async def get_links_and_cookies_with_retry(max_retries=3):
+async def get_links_and_cookies_with_retry(max_retries=5):
     attempt = 0
     while attempt < max_retries:
         attempt += 1
@@ -161,7 +161,7 @@ def apply_excel_style(ws):
     """시트 스타일 적용"""
     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     header_fill = PatternFill(start_color='D3D3D3', end_color='D3D3D3', fill_type='solid')
-    data_fill = PatternFill(start_color='F5F5F5', end_color='F5F5F5', fill_type='solid')
+    # data_fill = PatternFill(start_color='F5F5F5', end_color='F5F5F5', fill_type='solid')
     
     for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
         for cell in row:
@@ -171,7 +171,7 @@ def apply_excel_style(ws):
                 cell.fill = header_fill
                 cell.font = Font(bold=True)
             else:
-                cell.fill = data_fill
+                # cell.fill = data_fill
                 if ws.title == 'Summary':
                     if cell.column == 3:
                         try:
@@ -323,7 +323,7 @@ def process_data(data):
 
 async def main():
     try:
-        data = await get_links_and_cookies_with_retry(max_retries=3)
+        data = await get_links_and_cookies_with_retry(max_retries=5)
         file_name, df_cma_result = process_data(data)
         
         today_str = datetime.now().strftime('%Y-%m-%d')
@@ -343,7 +343,7 @@ async def main():
 
         subject = f"CMA {today_str}"
 
-        html_table = df_cma_result.to_html(justify='center', index=True)
+        html_table = df_cma_result.to_html(justify='center', index=False)
 
         custom_table_tag = '<table border="1" cellpadding="5" cellspacing="0" style="border-collapse:collapse; text-align:center; font-family:Calibri, Arial, sans-serif; font-size:13px;">'
         html_table = html_table.replace('<table border="1" class="dataframe">', custom_table_tag)
