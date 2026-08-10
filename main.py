@@ -89,10 +89,10 @@ async def get_links_and_cookies_with_retry(max_retries=5):
                 cma_password = os.environ.get("CMA_PASSWORD")
                 
                 # 만약 GitHub Secrets 설정 전이라면 로컬 테스트용 백업 계정 사용
-                if not cma_user or not cma_password:
-                    print("⚠️ 환경변수가 확인되지 않아 하드코딩된 계정 정보로 로그인을 시도합니다.")
-                    cma_user = 'jp_lee@skgeocentric.com'
-                    cma_password = '!ghkgkr8896'
+                # if not cma_user or not cma_password:
+                #     print("⚠️ 환경변수가 확인되지 않아 하드코딩된 계정 정보로 로그인을 시도합니다.")
+                #     cma_user = 'jp_lee@skgeocentric.com'
+                #     cma_password = 'password'
 
                 email_selector = 'input[name="emailOrUserID"], #email'
                 await page.wait_for_selector(email_selector, state="visible", timeout=30000)
