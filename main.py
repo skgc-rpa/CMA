@@ -161,7 +161,6 @@ def apply_excel_style(ws):
     """시트 스타일 적용"""
     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     header_fill = PatternFill(start_color='D3D3D3', end_color='D3D3D3', fill_type='solid')
-    # data_fill = PatternFill(start_color='F5F5F5', end_color='F5F5F5', fill_type='solid')
     
     for row in ws.iter_rows(min_row=1, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
         for cell in row:
@@ -171,7 +170,6 @@ def apply_excel_style(ws):
                 cell.fill = header_fill
                 cell.font = Font(bold=True)
             else:
-                # cell.fill = data_fill
                 if ws.title == 'Summary':
                     if cell.column == 3:
                         try:
@@ -277,12 +275,24 @@ def process_data(data):
     page_text_monthly = m_soup.get_text(separator='\n', strip=True)
     try:
         summary_data["monthly_date"] = convert_to_yyyymmdd(page_text_monthly)
+        
+        # [패턴 1] 기존 문구 시도
         price_match = re.search(r'settlement price of\s*\$(\d+(?:\.\d+)?)\s*per gallon', page_text_monthly, re.IGNORECASE)
+        
+        # [패턴 2] 기존 문구가 없을 경우, 새로운 문구 시도
+        if not price_match:
+            price_match = re.search(r'average value of\s*\$(\d+(?:\.\d+)?)\s*per gallon', page_text_monthly, re.IGNORECASE)
+            
+        # 매칭 성공 시 기존과 동일하게 센트로 변환
         if price_match:
             summary_data["monthly_cents"] = round(float(price_match.group(1)) * 100, 2)
             print(f"📅 Monthly Date: {summary_data['monthly_date']}")
             print(f"💰 CP: {summary_data['monthly_cents']} cents")
-    except Exception as e: print(f"⚠️ Monthly 에러: {e}")
+        else:
+            print("⚠️ Monthly 가격 패턴을 찾을 수 없습니다. (리포트 문구 변경 의심)")
+            
+    except Exception as e: 
+        print(f"⚠️ Monthly 에러: {e}")
 
     # 4. Final Excel
     print("\n" + "="*20 + " [4] Excel 보고서 생성 " + "="*20)
