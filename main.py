@@ -110,12 +110,44 @@ async def get_links_and_cookies_with_retry(max_retries=5):
                 await page.wait_for_timeout(2000)
 
                 print("최신 보고서 링크 추출 중...")
-                daily_node = page.locator('a:has-text("Daily North America")').first
-                weekly_node = page.locator('a:has-text("Global Aromatics - Weekly Market Report")').first
-                monthly_node = page.locator('a:has-text("North America Aromatics - Benzene Contract Price")').first
                 
+                # [1] Daily 링크
+                daily_node = page.locator('a:has-text("Daily North America")').first
                 daily_url = await daily_node.get_attribute("href")
-                weekly_url = await weekly_node.get_attribute("href")
+                
+                # [2] Weekly 링크 (상위 10개 검토 -> Issue 최신순 & Reissue 우선 정렬)
+                weekly_locators = await page.locator('a:has-text("Global Aromatics - Weekly Market Report")').all()
+                weekly_candidates = []
+                for loc in weekly_locators[:10]:
+                    text = await loc.text_content()
+                    href = await loc.get_attribute("href")
+                    if href and text:
+                        # Issue 번호 파싱 (숫자로 변환하여 비교)
+                        issue_match = re.search(r'Issue\s*(\d+)', text, re.IGNORECASE)
+                        issue_num = int(issue_match.group(1)) if issue_match else 0
+                        
+                        # Reissue 여부 판별 (1: Reissue, 0: 일반)
+                        is_reissue = 1 if ('reissue' in text.lower() or 'revised' in text.lower()) else 0
+                        
+                        weekly_candidates.append({
+                            'text': text.strip(),
+                            'href': href,
+                            'issue_num': issue_num,
+                            'is_reissue': is_reissue
+                        })
+                
+                if weekly_candidates:
+                    # 1순위: issue_num 큰 것 내림차순, 2순위: is_reissue(1) 우선
+                    weekly_candidates.sort(key=lambda x: (x['issue_num'], x['is_reissue']), reverse=True)
+                    best_weekly = weekly_candidates[0]
+                    weekly_url = best_weekly['href']
+                    print(f"📌 선택된 Weekly 리포트: '{best_weekly['text']}' (Issue: {best_weekly['issue_num']}, Reissue: {bool(best_weekly['is_reissue'])})")
+                else:
+                    weekly_node = page.locator('a:has-text("Global Aromatics - Weekly Market Report")').first
+                    weekly_url = await weekly_node.get_attribute("href")
+
+                # [3] Monthly 링크
+                monthly_node = page.locator('a:has-text("North America Aromatics - Benzene Contract Price")').first
                 monthly_url = await monthly_node.get_attribute("href")
                 
                 base_url = "https://cma.opisnet.com"
@@ -237,7 +269,7 @@ def process_data(data):
 
     summary_data = {
         "daily_means": [], 
-        "daily_date": None,
+        "daily_date": None, 
         "daily_actual_date": None,
         "weekly_mean": None, 
         "weekly_date": None, 
