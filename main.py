@@ -170,7 +170,7 @@ def apply_excel_style(ws):
                             cell.value = float(cell.value)
                             cell.number_format = '0.0'
                         except: pass
-                    # 기준 날짜 (Col 4) 및 실제 날짜 (Col 5) 숫자 서식 적용
+                    # 기준 날짜(Col 4) 및 실제 날짜(Col 5) 숫자 서식 적용
                     if cell.column in (4, 5):
                         try:
                             cell.value = int(str(cell.value).strip())
@@ -187,6 +187,37 @@ def apply_excel_style(ws):
             except: pass
         ws.column_dimensions[column].width = max_length + 5
 
+def check_monthly_business_day(now):
+    """
+    당월 첫 1~5영업일 또는 마지막 1~3영업일인지 확인하고,
+    해당할 경우 (True, '기준날짜(YYYYMM01)')를 반환합니다.
+    """
+    start_of_month = now.replace(day=1)
+    if now.month == 12:
+        next_month = now.replace(year=now.year + 1, month=1, day=1)
+    else:
+        next_month = now.replace(month=now.month + 1, day=1)
+    end_of_month = next_month - timedelta(days=1)
+
+    # 당월 모든 평일(월~금) 목록 생성
+    b_days = pd.bdate_range(start=start_of_month, end=end_of_month).date
+
+    first_5_bdays = b_days[:5]   # 당월 첫 1~5영업일
+    last_3_bdays = b_days[-3:]   # 당월 마지막 1~3영업일
+
+    today_date = now.date()
+
+    if today_date in last_3_bdays:
+        # 월말 마지막 3영업일 -> 익월 1일
+        ref_date = f"{next_month.year}{next_month.month:02d}01"
+        return True, ref_date
+    elif today_date in first_5_bdays:
+        # 월초 첫 5영업일 -> 당월 1일
+        ref_date = f"{now.year}{now.month:02d}01"
+        return True, ref_date
+    else:
+        return False, None
+
 def process_data(data):
     session = requests.Session()
     session.verify = False 
@@ -199,11 +230,10 @@ def process_data(data):
 
     now = datetime.now()
     current_weekday = now.weekday()  # 0: 월, 1: 화, 2: 수, 3: 목, 4: 금, 5: 토, 6: 일
-    current_day = now.day
 
     # 실행 조건 판별
     run_weekly = current_weekday in (0, 4)  # 월요일(0) 또는 금요일(4)
-    run_monthly = (current_day >= 27 or current_day <= 5)  # 27~31일 또는 1~5일
+    run_monthly, monthly_ref_date = check_monthly_business_day(now)  # 월말 3영업일 또는 월초 5영업일
 
     summary_data = {
         "daily_means": [], 
@@ -288,7 +318,7 @@ def process_data(data):
                             final_df[3] = final_df.apply(calculate_mean, axis=1)
                             summary_data["weekly_mean"] = final_df.iloc[-1, 3]
                             
-                            # 문서 내 실제 날짜 추출
+                            # 문서 내 실제 기재 날짜 추출
                             summary_data["weekly_actual_date"] = convert_to_yyyymmdd(final_df.iloc[-1, 0])
                             
                             print(f"📅 Weekly 기준 날짜(고정): {summary_data['weekly_date']}, 실제 날짜: {summary_data['weekly_actual_date']}")
@@ -298,18 +328,11 @@ def process_data(data):
     else:
         print("\n⏩ [2] Weekly 분석 건너뜀 (금/월 아님)")
 
-    # 3. Monthly (27~31일 또는 1~5일 실행)
+    # 3. Monthly (월말 3영업일 또는 월초 5영업일 실행)
     if run_monthly:
-        print("\n" + "="*20 + " [3] Monthly 분석 시작 (월말/월초 실행) " + "="*20)
+        print("\n" + "="*20 + " [3] Monthly 분석 시작 (월말 3영업일 / 월초 5영업일 실행) " + "="*20)
         try:
-            # 기준 날짜 계산: 월말(27~31일)이면 익월 1일, 월초(1~5일)이면 당월 1일
-            if current_day >= 27:
-                if now.month == 12:
-                    summary_data["monthly_date"] = f"{now.year + 1}0101"
-                else:
-                    summary_data["monthly_date"] = f"{now.year}{now.month + 1:02d}01"
-            else:
-                summary_data["monthly_date"] = f"{now.year}{now.month:02d}01"
+            summary_data["monthly_date"] = monthly_ref_date
 
             m_resp = session.get(data['monthly_url'])
             m_soup = BeautifulSoup(m_resp.text, 'html.parser')
@@ -332,9 +355,9 @@ def process_data(data):
         except Exception as e: 
             print(f"⚠️ Monthly 에러: {e}")
     else:
-        print("\n⏩ [3] Monthly 분석 건너뜀 (월말/월초 기간 아님)")
+        print("\n⏩ [3] Monthly 분석 건너뜀 (월말 3영업일 / 월초 5영업일 기간 아님)")
 
-    # 4. Final Excel 생성 (동적 Row 구성 + 실제 날짜 컬럼 추가)
+    # 4. Final Excel 생성 (동적 Row 구성 + 실제 날짜 열)
     print("\n" + "="*20 + " [4] Excel 보고서 생성 " + "="*20)
     today_str = now.strftime('%Y-%m-%d')
     quot_no_list = ["60M60681", "60M60682", "60M60683", "60M60686", "60M60684"]
@@ -352,12 +375,12 @@ def process_data(data):
         val = summary_data["weekly_mean"] if summary_data["weekly_mean"] is not None else "N/A"
         final_rows.append([marker_names[3], quot_no_list[3], val, summary_data["weekly_date"], summary_data["weekly_actual_date"]])
         
-    # Monthly 행 (월말/월초에만 추가)
+    # Monthly 행 (월말 3영업일/월초 5영업일에만 추가)
     if run_monthly:
         val = summary_data["monthly_cents"] if summary_data["monthly_cents"] is not None else "N/A"
         final_rows.append([marker_names[4], quot_no_list[4], val, summary_data["monthly_date"], summary_data["monthly_actual_date"]])
 
-    # DataFrame 생성 (실제 날짜 열 추가)
+    # DataFrame 생성
     final_summary_df = pd.DataFrame(final_rows, columns=['Marker 가격', 'Quot. No', today_str, '기준 날짜', '실제 날짜'])
     
     # URL 시트 목록 동적 생성
