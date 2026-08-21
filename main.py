@@ -101,32 +101,38 @@ async def get_links_and_cookies_with_retry(max_retries=5):
                 print("로그인 완료 대기 중...")
                 await page.wait_for_url(lambda url: "cma.opisnet.com" in url and "login" not in url.lower(), timeout=45000)
                 
-                # 5. 목록 페이지 이동 및 링크 추출
+                # 5. 목록 페이지 이동 (Daily / Monthly 추출)
                 list_url = "https://cma.opisnet.com/publications/market-advisory-service?page=1&itemsPerPage=100"
-                print(f"목록 페이지 로딩 중... ({list_url})")
+                print(f"Daily/Monthly 목록 페이지 로딩 중... ({list_url})")
                 await page.goto(list_url, wait_until="domcontentloaded", timeout=60000)
                 
                 await page.wait_for_selector('a:has-text("Daily North America")', timeout=30000)
                 await page.wait_for_timeout(2000)
 
-                print("최신 보고서 링크 추출 중...")
-                
-                # [1] Daily 링크
+                print("Daily 및 Monthly 보고서 링크 추출 중...")
                 daily_node = page.locator('a:has-text("Daily North America")').first
-                daily_url = await daily_node.get_attribute("href")
+                monthly_node = page.locator('a:has-text("North America Aromatics - Benzene Contract Price")').first
                 
-                # [2] Weekly 링크 (상위 10개 검토 -> Issue 최신순 & Reissue 우선 정렬)
+                daily_url = await daily_node.get_attribute("href")
+                monthly_url = await monthly_node.get_attribute("href")
+
+                # 6. Weekly 전용 검색 페이지 이동 및 선별
+                weekly_search_url = "https://cma.opisnet.com/find?search_api_fulltext=Global%20Aromatics%20-%20Weekly%20Market%20Report"
+                print(f"Weekly 전용 검색 페이지 로딩 중... ({weekly_search_url})")
+                await page.goto(weekly_search_url, wait_until="domcontentloaded", timeout=60000)
+                
+                await page.wait_for_selector('a:has-text("Global Aromatics - Weekly Market Report")', timeout=30000)
+                await page.wait_for_timeout(2000)
+
+                print("Weekly 보고서 후보군 탐색 및 최신 링크 선별 중...")
                 weekly_locators = await page.locator('a:has-text("Global Aromatics - Weekly Market Report")').all()
                 weekly_candidates = []
                 for loc in weekly_locators[:10]:
                     text = await loc.text_content()
                     href = await loc.get_attribute("href")
                     if href and text:
-                        # Issue 번호 파싱 (숫자로 변환하여 비교)
                         issue_match = re.search(r'Issue\s*(\d+)', text, re.IGNORECASE)
                         issue_num = int(issue_match.group(1)) if issue_match else 0
-                        
-                        # Reissue 여부 판별 (1: Reissue, 0: 일반)
                         is_reissue = 1 if ('reissue' in text.lower() or 'revised' in text.lower()) else 0
                         
                         weekly_candidates.append({
@@ -137,7 +143,7 @@ async def get_links_and_cookies_with_retry(max_retries=5):
                         })
                 
                 if weekly_candidates:
-                    # 1순위: issue_num 큰 것 내림차순, 2순위: is_reissue(1) 우선
+                    # 1순위: issue_num 내림차순, 2순위: is_reissue(1) 우선
                     weekly_candidates.sort(key=lambda x: (x['issue_num'], x['is_reissue']), reverse=True)
                     best_weekly = weekly_candidates[0]
                     weekly_url = best_weekly['href']
@@ -145,10 +151,6 @@ async def get_links_and_cookies_with_retry(max_retries=5):
                 else:
                     weekly_node = page.locator('a:has-text("Global Aromatics - Weekly Market Report")').first
                     weekly_url = await weekly_node.get_attribute("href")
-
-                # [3] Monthly 링크
-                monthly_node = page.locator('a:has-text("North America Aromatics - Benzene Contract Price")').first
-                monthly_url = await monthly_node.get_attribute("href")
                 
                 base_url = "https://cma.opisnet.com"
                 data = {
