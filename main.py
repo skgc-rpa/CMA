@@ -7,7 +7,7 @@ import urllib3
 import io
 import smtplib
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 from openpyxl.styles import Border, Side, PatternFill, Alignment, Font
@@ -65,7 +65,7 @@ async def get_links_and_cookies_with_retry(max_retries=5):
         print(f"\n[{attempt}/{max_retries}] 전체 프로세스 시도 중 (브라우저 재시작 포함)...")
         
         try:
-            # 1. requests로 SSO URL을 미리 따옴
+            # 1. requests로 SSO URL 획득
             sso_url = get_dow_jones_sso_url()
             if not sso_url:
                 print("   ⚠️ SSO URL을 가져오지 못했습니다. 잠시 후 다시 시도합니다.")
@@ -73,7 +73,7 @@ async def get_links_and_cookies_with_retry(max_retries=5):
                 if attempt < max_retries: continue
                 else: raise Exception("SSO URL 획득 최종 실패")
 
-            # 2. 브라우저 실행 단계 (깃허브 액션즈 환경을 위해 headless=True 고정)
+            # 2. 브라우저 실행 단계
             async with async_playwright() as p:
                 print(f"브라우저를 실행합니다 (headless=True)...")
                 browser = await p.chromium.launch(headless=True)
@@ -84,15 +84,9 @@ async def get_links_and_cookies_with_retry(max_retries=5):
                 print(f"SSO 페이지로 직접 접속합니다...")
                 await page.goto(sso_url, wait_until="domcontentloaded", timeout=60000)
                 
-                # 4. 로그인 정보 입력 (환경변수 로드)
+                # 4. 로그인 정보 입력
                 cma_user = os.environ.get("CMA_USER")
                 cma_password = os.environ.get("CMA_PASSWORD")
-                
-                # 만약 GitHub Secrets 설정 전이라면 로컬 테스트용 백업 계정 사용
-                # if not cma_user or not cma_password:
-                #     print("⚠️ 환경변수가 확인되지 않아 하드코딩된 계정 정보로 로그인을 시도합니다.")
-                #     cma_user = 'jp_lee@skgeocentric.com'
-                #     cma_password = 'password'
 
                 email_selector = 'input[name="emailOrUserID"], #email'
                 await page.wait_for_selector(email_selector, state="visible", timeout=30000)
@@ -176,7 +170,8 @@ def apply_excel_style(ws):
                             cell.value = float(cell.value)
                             cell.number_format = '0.0'
                         except: pass
-                    if cell.column == 4:
+                    # 기준 날짜 (Col 4) 및 실제 날짜 (Col 5) 숫자 서식 적용
+                    if cell.column in (4, 5):
                         try:
                             cell.value = int(str(cell.value).strip())
                             cell.number_format = '0'
@@ -202,15 +197,36 @@ def process_data(data):
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     })
 
-    summary_data = {"daily_means": [], "daily_date": None, "weekly_mean": None, "weekly_date": None, "monthly_cents": None, "monthly_date": None}
+    now = datetime.now()
+    current_weekday = now.weekday()  # 0: 월, 1: 화, 2: 수, 3: 목, 4: 금, 5: 토, 6: 일
+    current_day = now.day
 
-    # 1. Daily
+    # 실행 조건 판별
+    run_weekly = current_weekday in (0, 4)  # 월요일(0) 또는 금요일(4)
+    run_monthly = (current_day >= 27 or current_day <= 5)  # 27~31일 또는 1~5일
+
+    summary_data = {
+        "daily_means": [], 
+        "daily_date": None,
+        "daily_actual_date": None,
+        "weekly_mean": None, 
+        "weekly_date": None, 
+        "weekly_actual_date": None,
+        "monthly_cents": None, 
+        "monthly_date": None,
+        "monthly_actual_date": None
+    }
+
+    # 1. Daily (항상 실행)
     print("\n" + "="*20 + " [1] Daily 분석 시작 " + "="*20)
     d_resp = session.get(data['daily_url'])
     d_soup = BeautifulSoup(d_resp.text, 'html.parser')
     page_text_daily = d_soup.get_text(separator='\n', strip=True)
     try:
-        summary_data["daily_date"] = convert_to_yyyymmdd(page_text_daily)
+        parsed_daily_date = convert_to_yyyymmdd(page_text_daily)
+        summary_data["daily_date"] = parsed_daily_date
+        summary_data["daily_actual_date"] = parsed_daily_date
+        
         benzene_start = re.search(r'Benzene\s*\(Houston,\s*TX\s*basis\)', page_text_daily, re.IGNORECASE)
         if benzene_start:
             section = page_text_daily[benzene_start.start():]
@@ -226,90 +242,133 @@ def process_data(data):
                     benzene_df = pd.DataFrame(rows, columns=['Month', 'Low', 'High'])
                     benzene_df['Mean'] = (benzene_df['Low'] + benzene_df['High']) / 2
                     summary_data["daily_means"] = benzene_df['Mean'].tolist()
-                    print(f"📅 Daily Date: {summary_data['daily_date']}")
+                    print(f"📅 Daily Date (기준/실제): {summary_data['daily_date']}")
                     print(benzene_df)
-    except Exception as e: print(f"⚠️ Daily 에러: {e}")
-
-    # 2. Weekly
-    print("\n" + "="*20 + " [2] Weekly 분석 시작 " + "="*20)
-    w_resp = session.get(data['weekly_url'])
-    w_soup = BeautifulSoup(w_resp.text, 'html.parser')
-    excel_url = None
-    for a in w_soup.find_all('a', href=True):
-        if ".xlsx" in a['href'] or ".xlsx" in a.get_text():
-            excel_url = "https://cma.opisnet.com" + a['href'] if a['href'].startswith('/') else a['href']
-            break
-    if excel_url:
-        e_resp = session.get(excel_url)
-        if e_resp.status_code == 200:
-            try:
-                df_raw = pd.read_excel(io.BytesIO(e_resp.content), header=None)
-                row_market, row_type = -1, -1
-                for r in range(min(20, df_raw.shape[0])):
-                    cell_val = str(df_raw.iloc[r, 0]).strip().upper()
-                    if "MARKET" in cell_val: row_market = r
-                    if "TYPE" in cell_val: row_type = r
-                if row_market != -1:
-                    target_col = -1
-                    for col in range(df_raw.shape[1]):
-                        if "Benzene" in str(df_raw.iloc[row_market, col]) and "Spot" in str(df_raw.iloc[row_type, col]):
-                            target_col = col; break
-                    if target_col != -1:
-                        final_df = pd.concat([df_raw.iloc[0:9, [0, target_col, target_col+1]], df_raw.iloc[-2:, [0, target_col, target_col+1]]])
-                        final_df = final_df.reset_index(drop=True)
-                        final_df.columns = range(final_df.shape[1])
-                        def calculate_mean(row):
-                            try: return (float(row[1]) + float(row[2])) / 2
-                            except: return None
-                        final_df[3] = final_df.apply(calculate_mean, axis=1)
-                        summary_data["weekly_mean"] = final_df.iloc[-1, 3]
-                        summary_data["weekly_date"] = convert_to_yyyymmdd(final_df.iloc[-1, 0])
-                        print(f"📅 Weekly Date: {summary_data['weekly_date']}")
-                        print(final_df)
-            except Exception as e: print(f"⚠️ Weekly 에러: {e}")
-
-    # 3. Monthly
-    print("\n" + "="*20 + " [3] Monthly 분석 시작 " + "="*20)
-    m_resp = session.get(data['monthly_url'])
-    m_soup = BeautifulSoup(m_resp.text, 'html.parser')
-    page_text_monthly = m_soup.get_text(separator='\n', strip=True)
-    try:
-        summary_data["monthly_date"] = convert_to_yyyymmdd(page_text_monthly)
-        
-        # [패턴 1] 기존 문구 시도
-        price_match = re.search(r'settlement price of\s*\$(\d+(?:\.\d+)?)\s*per gallon', page_text_monthly, re.IGNORECASE)
-        
-        # [패턴 2] 기존 문구가 없을 경우, 새로운 문구 시도
-        if not price_match:
-            price_match = re.search(r'average value of\s*\$(\d+(?:\.\d+)?)\s*per gallon', page_text_monthly, re.IGNORECASE)
-            
-        # 매칭 성공 시 기존과 동일하게 센트로 변환
-        if price_match:
-            summary_data["monthly_cents"] = round(float(price_match.group(1)) * 100, 2)
-            print(f"📅 Monthly Date: {summary_data['monthly_date']}")
-            print(f"💰 CP: {summary_data['monthly_cents']} cents")
-        else:
-            print("⚠️ Monthly 가격 패턴을 찾을 수 없습니다. (리포트 문구 변경 의심)")
-            
     except Exception as e: 
-        print(f"⚠️ Monthly 에러: {e}")
+        print(f"⚠️ Daily 에러: {e}")
 
-    # 4. Final Excel
+    # 2. Weekly (금/월 실행)
+    if run_weekly:
+        print("\n" + "="*20 + " [2] Weekly 분석 시작 (금/월 실행) " + "="*20)
+        try:
+            # 기준 날짜 계산: 금요일이면 당일, 월요일이면 -3일(금요일)
+            if current_weekday == 4:
+                summary_data["weekly_date"] = now.strftime('%Y%m%d')
+            elif current_weekday == 0:
+                summary_data["weekly_date"] = (now - timedelta(days=3)).strftime('%Y%m%d')
+
+            w_resp = session.get(data['weekly_url'])
+            w_soup = BeautifulSoup(w_resp.text, 'html.parser')
+            excel_url = None
+            for a in w_soup.find_all('a', href=True):
+                if ".xlsx" in a['href'] or ".xlsx" in a.get_text():
+                    excel_url = "https://cma.opisnet.com" + a['href'] if a['href'].startswith('/') else a['href']
+                    break
+            if excel_url:
+                e_resp = session.get(excel_url)
+                if e_resp.status_code == 200:
+                    df_raw = pd.read_excel(io.BytesIO(e_resp.content), header=None)
+                    row_market, row_type = -1, -1
+                    for r in range(min(20, df_raw.shape[0])):
+                        cell_val = str(df_raw.iloc[r, 0]).strip().upper()
+                        if "MARKET" in cell_val: row_market = r
+                        if "TYPE" in cell_val: row_type = r
+                    if row_market != -1:
+                        target_col = -1
+                        for col in range(df_raw.shape[1]):
+                            if "Benzene" in str(df_raw.iloc[row_market, col]) and "Spot" in str(df_raw.iloc[row_type, col]):
+                                target_col = col; break
+                        if target_col != -1:
+                            final_df = pd.concat([df_raw.iloc[0:9, [0, target_col, target_col+1]], df_raw.iloc[-2:, [0, target_col, target_col+1]]])
+                            final_df = final_df.reset_index(drop=True)
+                            final_df.columns = range(final_df.shape[1])
+                            def calculate_mean(row):
+                                try: return (float(row[1]) + float(row[2])) / 2
+                                except: return None
+                            final_df[3] = final_df.apply(calculate_mean, axis=1)
+                            summary_data["weekly_mean"] = final_df.iloc[-1, 3]
+                            
+                            # 문서 내 실제 날짜 추출
+                            summary_data["weekly_actual_date"] = convert_to_yyyymmdd(final_df.iloc[-1, 0])
+                            
+                            print(f"📅 Weekly 기준 날짜(고정): {summary_data['weekly_date']}, 실제 날짜: {summary_data['weekly_actual_date']}")
+                            print(final_df)
+        except Exception as e: 
+            print(f"⚠️ Weekly 에러: {e}")
+    else:
+        print("\n⏩ [2] Weekly 분석 건너뜀 (금/월 아님)")
+
+    # 3. Monthly (27~31일 또는 1~5일 실행)
+    if run_monthly:
+        print("\n" + "="*20 + " [3] Monthly 분석 시작 (월말/월초 실행) " + "="*20)
+        try:
+            # 기준 날짜 계산: 월말(27~31일)이면 익월 1일, 월초(1~5일)이면 당월 1일
+            if current_day >= 27:
+                if now.month == 12:
+                    summary_data["monthly_date"] = f"{now.year + 1}0101"
+                else:
+                    summary_data["monthly_date"] = f"{now.year}{now.month + 1:02d}01"
+            else:
+                summary_data["monthly_date"] = f"{now.year}{now.month:02d}01"
+
+            m_resp = session.get(data['monthly_url'])
+            m_soup = BeautifulSoup(m_resp.text, 'html.parser')
+            page_text_monthly = m_soup.get_text(separator='\n', strip=True)
+            
+            # 본문 내 실제 날짜 추출
+            summary_data["monthly_actual_date"] = convert_to_yyyymmdd(page_text_monthly)
+
+            # 패턴 매칭
+            price_match = re.search(r'settlement price of\s*\$(\d+(?:\.\d+)?)\s*per gallon', page_text_monthly, re.IGNORECASE)
+            if not price_match:
+                price_match = re.search(r'average value of\s*\$(\d+(?:\.\d+)?)\s*per gallon', page_text_monthly, re.IGNORECASE)
+                
+            if price_match:
+                summary_data["monthly_cents"] = round(float(price_match.group(1)) * 100, 2)
+                print(f"📅 Monthly 기준 날짜(고정): {summary_data['monthly_date']}, 실제 날짜: {summary_data['monthly_actual_date']}")
+                print(f"💰 CP: {summary_data['monthly_cents']} cents")
+            else:
+                print("⚠️ Monthly 가격 패턴을 찾을 수 없습니다. (리포트 문구 변경 의심)")
+        except Exception as e: 
+            print(f"⚠️ Monthly 에러: {e}")
+    else:
+        print("\n⏩ [3] Monthly 분석 건너뜀 (월말/월초 기간 아님)")
+
+    # 4. Final Excel 생성 (동적 Row 구성 + 실제 날짜 컬럼 추가)
     print("\n" + "="*20 + " [4] Excel 보고서 생성 " + "="*20)
-    today_str = datetime.now().strftime('%Y-%m-%d')
+    today_str = now.strftime('%Y-%m-%d')
     quot_no_list = ["60M60681", "60M60682", "60M60683", "60M60686", "60M60684"]
     marker_names = ["US BZ DDP Spot Daily(M월)", "US BZ DDP Spot Daily(M+1월)", "US BZ DDP Spot Daily(M+2월)", "US BZ DDP Spot Weekly", "US BZ Monthly Contract Price(CP) cent/gal"]
     
     final_rows = []
+    
+    # Daily 3개 행 (항상 추가)
     for i in range(3):
-        final_rows.append([marker_names[i], quot_no_list[i], summary_data["daily_means"][i] if i < len(summary_data["daily_means"]) else "N/A", summary_data["daily_date"]])
-    final_rows.append([marker_names[3], quot_no_list[3], summary_data["weekly_mean"] if summary_data["weekly_mean"] is not None else "N/A", summary_data["weekly_date"]])
-    final_rows.append([marker_names[4], quot_no_list[4], summary_data["monthly_cents"] if summary_data["monthly_cents"] is not None else "N/A", summary_data["monthly_date"]])
+        val = summary_data["daily_means"][i] if i < len(summary_data["daily_means"]) else "N/A"
+        final_rows.append([marker_names[i], quot_no_list[i], val, summary_data["daily_date"], summary_data["daily_actual_date"]])
+    
+    # Weekly 행 (금/월에만 추가)
+    if run_weekly:
+        val = summary_data["weekly_mean"] if summary_data["weekly_mean"] is not None else "N/A"
+        final_rows.append([marker_names[3], quot_no_list[3], val, summary_data["weekly_date"], summary_data["weekly_actual_date"]])
+        
+    # Monthly 행 (월말/월초에만 추가)
+    if run_monthly:
+        val = summary_data["monthly_cents"] if summary_data["monthly_cents"] is not None else "N/A"
+        final_rows.append([marker_names[4], quot_no_list[4], val, summary_data["monthly_date"], summary_data["monthly_actual_date"]])
 
-    final_summary_df = pd.DataFrame(final_rows, columns=['Marker 가격', 'Quot. No', today_str, '기준 날짜'])
-    url_df = pd.DataFrame([["Daily", data["daily_url"]], ["Weekly", data["weekly_url"]], ["Monthly", data["monthly_url"]]], columns=["Category", "URL"])
+    # DataFrame 생성 (실제 날짜 열 추가)
+    final_summary_df = pd.DataFrame(final_rows, columns=['Marker 가격', 'Quot. No', today_str, '기준 날짜', '실제 날짜'])
+    
+    # URL 시트 목록 동적 생성
+    url_rows = [["Daily", data["daily_url"]]]
+    if run_weekly:
+        url_rows.append(["Weekly", data["weekly_url"]])
+    if run_monthly:
+        url_rows.append(["Monthly", data["monthly_url"]])
+    url_df = pd.DataFrame(url_rows, columns=["Category", "URL"])
 
-    xlsx_file_name = f"CMA_OPIS_{datetime.now().strftime('%Y%m%d')}.xlsx"
+    xlsx_file_name = f"CMA_OPIS_{now.strftime('%Y%m%d')}.xlsx"
     with pd.ExcelWriter(xlsx_file_name, engine='openpyxl') as writer:
         final_summary_df.to_excel(writer, sheet_name='Summary', index=False)
         url_df.to_excel(writer, sheet_name='URL', index=False)
@@ -318,9 +377,9 @@ def process_data(data):
             ws = workbook[sheet_name]
             apply_excel_style(ws)
             if sheet_name == 'URL':
-                for i, url in enumerate([data["daily_url"], data["weekly_url"], data["monthly_url"]], start=2):
+                for i, row_item in enumerate(url_rows, start=2):
                     cell = ws.cell(row=i, column=2)
-                    cell.hyperlink = url
+                    cell.hyperlink = row_item[1]
                     cell.font = Font(color="0000FF", underline="single")
 
     print(f"💾 저장 완료: {xlsx_file_name}")
@@ -330,7 +389,6 @@ def process_data(data):
     
     return xlsx_file_name, final_summary_df
 
-
 async def main():
     try:
         data = await get_links_and_cookies_with_retry(max_retries=5)
@@ -338,22 +396,17 @@ async def main():
         
         today_str = datetime.now().strftime('%Y-%m-%d')
 
-        # =========================================================
-        # 10. 이메일 발송 (지메일 전송 환경변수 연동)
-        # =========================================================
         print("=== 메일 발송 준비 ===")
 
         sender_email = os.environ.get("GMAIL_USER")
         app_password = os.environ.get("GMAIL_APP_PASSWORD")
 
-        to_emails = "rchangjo@sk.com, hyo548@sk.com"
-        # to_emails = "jp_lee@sk.com"
-        cc_emails = "jp_lee@sk.com"
+        to_emails = ["rchangjo@sk.com", "hyo548@sk.com"]
+        cc_emails = ["jp_lee@sk.com"]
 
         subject = f"CMA {today_str}"
 
         html_table = df_cma_result.to_html(justify='center', index=False)
-
         custom_table_tag = '<table border="1" cellpadding="5" cellspacing="0" style="border-collapse:collapse; text-align:center; font-family:Calibri, Arial, sans-serif; font-size:13px;">'
         html_table = html_table.replace('<table border="1" class="dataframe">', custom_table_tag)
 
@@ -377,8 +430,8 @@ async def main():
         msg = EmailMessage()
         msg['Subject'] = subject
         msg['From'] = sender_email
-        msg['To'] = to_emails    
-        msg['Cc'] = cc_emails    
+        msg['To'] = ", ".join(to_emails)
+        msg['Cc'] = ", ".join(cc_emails)
         msg.set_content("HTML 뷰어를 지원하는 메일 클라이언트를 사용해 주세요.") 
         msg.add_alternative(html_body, subtype='html')
 
