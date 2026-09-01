@@ -331,7 +331,17 @@ def process_data(data):
             if excel_url:
                 e_resp = session.get(excel_url)
                 if e_resp.status_code == 200:
-                    df_raw = pd.read_excel(io.BytesIO(e_resp.content), header=None)
+                    xls = pd.ExcelFile(io.BytesIO(e_resp.content))
+                    sheet_names = xls.sheet_names
+                    selected_sheet = next(
+                        (s for s in sheet_names if s.lower() == "usa"),
+                        sheet_names[0]
+                    )
+                    df_raw = pd.read_excel(
+                        io.BytesIO(e_resp.content),
+                        sheet_name=selected_sheet,
+                        header=None
+                    )                  
                     row_market, row_type = -1, -1
                     for r in range(min(20, df_raw.shape[0])):
                         cell_val = str(df_raw.iloc[r, 0]).strip().upper()
