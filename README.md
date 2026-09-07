@@ -40,8 +40,8 @@ CMA/
 
 * **`GMAIL_USER`**: 알림을 발송할 본인의 Gmail 주소 (예: `example@gmail.com`)
 * **`GMAIL_APP_PASSWORD`**: 구글 계정에서 발급받은 16자리 앱 비밀번호
-* **`CMA_USER`**: CMA OPIS 사이트 로그인 이메일 (`jp_lee@skgeocentric.com`)
-* **`CMA_PASSWORD`**: CMA OPIS 사이트 로그인 비밀번호 (`!ghkgkr8896`)
+* **`CMA_USER`**: CMA OPIS 사이트 로그인 이메일
+* **`CMA_PASSWORD`**: CMA OPIS 사이트 로그인 비밀번호
 
 ---
 
