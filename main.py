@@ -117,7 +117,7 @@ async def get_links_and_cookies_with_retry(max_retries=5):
                 monthly_url = await monthly_node.get_attribute("href")
 
                 # 6. Weekly 전용 검색 페이지 이동 및 선별
-                weekly_search_url = "https://cma.opisnet.com/find?search_api_fulltext=Global%20Aromatics%20-%20Weekly%20Market%20Report"
+                weekly_search_url = "https://cma.opisnet.com/find?search_api_fulltext=Global%20Aromatics%20-%20Weekly%20Market%20Report&items_per_page=30&field_publication_date=All&page=0"
                 print(f"Weekly 전용 검색 페이지 로딩 중... ({weekly_search_url})")
                 await page.goto(weekly_search_url, wait_until="domcontentloaded", timeout=60000)
                 
